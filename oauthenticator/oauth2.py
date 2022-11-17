@@ -545,6 +545,16 @@ class OAuthenticator(Authenticator):
         """,
     )
 
+    # Callable() trailet expects this to always be defined so we ghetto it with Any()
+    normalize_username_cb = Any(
+        config=True,
+        help="""
+        User definable Authenticator:normalize_username() function
+
+        See https://jupyterhub.readthedocs.io/en/stable/api/auth.html?highlight=normalize_username#jupyterhub.auth.Authenticator.normalize_username
+        """,
+    )
+
     def _client_id_default(self):
         if self.client_id_env:
             client_id = os.getenv(self.client_id_env, "")
@@ -1112,6 +1122,12 @@ class OAuthenticator(Authenticator):
     # }
     #
     _deprecated_oauth_aliases = {}
+
+    def normalize_username(self, username):
+        if self.normalize_username_cb:
+            return self.normalize_username_cb(username)
+        else:
+            return super().normalize_username(username)
 
     def _deprecated_oauth_trait(self, change):
         """observer for deprecated traits"""
