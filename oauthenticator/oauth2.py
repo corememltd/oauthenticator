@@ -73,6 +73,8 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
     def set_state_cookie(self, state):
         self._set_cookie(STATE_COOKIE_NAME, state, expires_days=1, httponly=True)
 
+    _nonce = None
+
     _state = None
 
     def get_state(self):
@@ -91,18 +93,21 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
                     f"Ignoring next_url {original_next_url}, using {next_url}"
                 )
         if self._state is None:
+            self._nonce = os.urandom(16).hex()
             self._state = _serialize_state(
-                {"state_id": uuid.uuid4().hex, "next_url": next_url}
+                {"state_id": uuid.uuid4().hex, "next_url": next_url, "nonce": self._nonce}
             )
         return self._state
 
     def get(self):
-        redirect_uri = self.authenticator.get_callback_url(self)
-        token_params = self.authenticator.extra_authorize_params.copy()
-        self.log.info(f"OAuth redirect: {redirect_uri}")
+        # get (and sets) state before we need to capture nonce
         state = self.get_state()
         self.set_state_cookie(state)
+        redirect_uri = self.authenticator.get_callback_url(self)
+        token_params = self.authenticator.extra_authorize_params.copy()
+        token_params["nonce"] = self._nonce
         token_params["state"] = state
+        self.log.info(f"OAuth redirect: {redirect_uri}")
         self.authorize_redirect(
             redirect_uri=redirect_uri,
             client_id=self.authenticator.client_id,
@@ -769,6 +774,15 @@ class OAuthenticator(Authenticator):
         token_info = await self.get_token_info(handler, access_token_params)
         # use the access_token to get userdata info
         user_info = await self.token_to_user(token_info)
+        # validate nonce only if it is present
+        if "nonce" in user_info:
+            url_state = handler.get_argument("state")
+            nonce = _deserialize_state(url_state).get("nonce") if url_state else None
+            if not nonce or nonce != user_info["nonce"]:
+                self.log.error("OAuth user 'nonce' mismatch, expected '{}, got '{}'".format(
+                    nonce, user_info["nonce"]
+                ))
+                return None
         # extract the username out of the user_info dict
         username = self.user_info_to_username(user_info)
 
