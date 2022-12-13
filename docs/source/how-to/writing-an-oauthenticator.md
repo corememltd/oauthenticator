@@ -14,6 +14,7 @@ and configuration to set the necessary configuration variables.
 - client_id
 - client_secret
 - login_service
+- authorize_url
 - userdata_url
 - token_url
 - username_claim
@@ -21,12 +22,13 @@ and configuration to set the necessary configuration variables.
 Example config:
 
 ```python
-c.JupyterHub.authenticator_class = "generic-oauth"
+c.JupyterHub.authenticator_class = 'generic-oauth'
 
 c.GenericOAuthenticator.oauth_callback_url = 'https://{host}/hub/oauth_callback'
 c.GenericOAuthenticator.client_id = 'OAUTH-CLIENT-ID'
 c.GenericOAuthenticator.client_secret = 'OAUTH-CLIENT-SECRET-KEY'
 c.GenericOAuthenticator.login_service = 'name-of-service-provider'
+c.GenericOAuthenticator.authorize_url = 'url-submitting-authorization-request'
 c.GenericOAuthenticator.userdata_url = 'url-retrieving-user-data-with-access-token'
 c.GenericOAuthenticator.token_url = 'url-retrieving-access-token-oauth-completion'
 c.GenericOAuthenticator.username_claim = 'username-key-for-USERDATA-URL'
