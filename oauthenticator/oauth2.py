@@ -127,8 +127,9 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
 
         state_id = self._generate_state_id()
         next_url = self._get_next_url()
+        nonce = os.urandom(16).hex()
 
-        state = {"state_id": state_id, "next_url": next_url}
+        state = {"state_id": state_id, "next_url": next_url, "nonce": nonce}
 
         if self.authenticator.enable_pkce:
             code_verifier, code_challenge = self._generate_pkce_params()
@@ -141,6 +142,7 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
 
         authorize_state = _serialize_state({"state_id": state_id})
         token_params["state"] = authorize_state
+        token_params["nonce"] = nonce
 
         self.authorize_redirect(
             redirect_uri=redirect_uri,
@@ -1315,7 +1317,20 @@ class OAuthenticator(Authenticator):
         access_token_params = self.build_access_tokens_request_params(handler, data)
         token_info = await self.get_token_info(handler, access_token_params)
         # call the oauth endpoints
-        return await self._token_to_auth_model(token_info)
+        auth_model = await self._token_to_auth_model(token_info)
+        # validate nonce only if it is present
+        nonce = auth_model["auth_state"][self.user_auth_state_key].get("nonce")
+        if nonce:
+            cookie_state = handler.get_state_cookie()
+            nonce0 = _deserialize_state(cookie_state).get("nonce") if state else None
+            if nonce != nonce0:
+                self.log.error("OAuth user 'nonce' mismatch, expected '{}', got '{}'".format(
+                    nonce0, nonce
+                ))
+                return False
+        else:
+            self.log.warning("OAuth user 'nonce' not provided, ignoring")
+        return auth_model
 
     async def _call_refresh_user_hook(self, user, auth_state):
         """Call the refresh_user hook"""
