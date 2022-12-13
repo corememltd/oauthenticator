@@ -100,12 +100,14 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
 
         state_id = self._generate_state_id()
         next_url = self._get_next_url()
+        nonce = os.urandom(16).hex()
 
-        cookie_state = _serialize_state({"state_id": state_id, "next_url": next_url})
+        cookie_state = _serialize_state({"state_id": state_id, "next_url": next_url, "nonce": nonce})
         self.set_state_cookie(cookie_state)
 
         authorize_state = _serialize_state({"state_id": state_id})
         token_params["state"] = authorize_state
+        token_params["nonce"] = nonce
 
         self.authorize_redirect(
             redirect_uri=redirect_uri,
@@ -1029,6 +1031,17 @@ class OAuthenticator(Authenticator):
         token_info = await self.get_token_info(handler, access_token_params)
         # use the access_token to get userdata info
         user_info = await self.token_to_user(token_info)
+        # validate nonce only if it is present
+        if "nonce" in user_info:
+            state = handler.get_state_cookie()
+            nonce = _deserialize_state(state).get("nonce") if state else None
+            if not nonce or user_info["nonce"] != nonce:
+                self.log.error("OAuth user 'nonce' mismatch, expected '{}', got '{}'".format(
+                    nonce, user_info["nonce"]
+                ))
+                return None
+        else:
+                self.log.warning("OAuth user 'nonce' not provided, ignoring")
         # extract the username out of the user_info dict and normalize it
         username = self.user_info_to_username(user_info)
         username = self.normalize_username(username)
