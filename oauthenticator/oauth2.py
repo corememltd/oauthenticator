@@ -102,7 +102,13 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
         next_url = self._get_next_url()
         nonce = os.urandom(16).hex()
 
-        cookie_state = _serialize_state({"state_id": state_id, "next_url": next_url, "nonce": nonce})
+        if self.authenticator.openid_prefer_ux_over_csrf:
+            cookie_state = _serialize_state({"state_id": state_id})
+            authorize_state = _serialize_state({"state_id": state_id, "next_url": next_url, "nonce": nonce})
+        else:
+            cookie_state = _serialize_state({"state_id": state_id, "next_url": next_url, "nonce": nonce})
+            authorize_state = _serialize_state({"state_id": state_id})
+
         self.set_state_cookie(cookie_state)
 
         authorize_state = _serialize_state({"state_id": state_id})
@@ -150,12 +156,20 @@ class OAuthCallbackHandler(BaseHandler):
         cookie_state = self.get_state_cookie()
         url_state = self.get_state_url()
         if not cookie_state:
+            if self.authenticator.openid_prefer_ux_over_csrf:
+                self.log.warning(f"OAuth state missing from cookies (openid_prefer_ux_over_csrf set so ignoring)")
+                return
             raise web.HTTPError(400, "OAuth state missing from cookies")
         if not url_state:
             raise web.HTTPError(400, "OAuth state missing from URL")
         cookie_state_id = _deserialize_state(cookie_state).get('state_id')
         url_state_id = _deserialize_state(url_state).get('state_id')
         if cookie_state_id != url_state_id:
+            if self.authenticator.openid_prefer_ux_over_csrf:
+                self.log.warning(
+                    f"OAuth state mismatch: {cookie_state_id} != {url_state_id} (openid_prefer_ux_over_csrf set so ignoring)"
+                )
+                return
             self.log.warning(
                 f"OAuth state mismatch: {cookie_state_id} != {url_state_id}"
             )
@@ -197,7 +211,10 @@ class OAuthCallbackHandler(BaseHandler):
 
     def get_next_url(self, user=None):
         """Get the redirect target from the state field"""
-        state = self.get_state_cookie()
+        if self.authenticator.openid_prefer_ux_over_csrf:
+            state = self.get_state_url()
+        else:
+            state = self.get_state_cookie()
         if state:
             next_url = _deserialize_state(state).get("next_url")
             if next_url:
@@ -553,6 +570,42 @@ class OAuthenticator(Authenticator):
 
         See https://jupyterhub.readthedocs.io/en/stable/api/auth.html?highlight=normalize_username#jupyterhub.auth.Authenticator.normalize_username
         """,
+    )
+
+    openid_prefer_ux_over_csrf = Bool(
+        config=True,
+        help="""Improve the User Experience at the risk of a CSRF attack.
+
+        When using a login-via-email OpenID flow (eg. Portier) your users
+        may struggle to open the link in the email sent in the same browsing
+        context as the original authentication session to JupyterHub; examples
+        of this may be where the login occurs in a private browsing session
+        whilst the link is followed in a non-private session or when your
+        log in via one browser but your email client opens links in another
+        browser by default.
+
+        This is due to the OpenID Connect Core 1.0 section 3.1.2.1 (and also
+        RFC6749 section 10.12) requires a CSRF protection mechanism which
+        really can only be implemented using a browser session cookie.
+
+        If the consequences of a CSRF attack are minimal, for example your
+        deployment is to only demo or provide free learning materials, where
+        there is no motivation or reason for an attacker to attempt this you
+        may wish to consider enabling this option to change a failed
+        validation of the session cookie 'state' to be a log warning only. For
+        the attack to work, the bad actor would need to be able to amend URLs
+        in the email you receive from your identity provider.
+
+        It is strongly recommended you do *not* enable this option.
+
+        If you do, only use it when authenticating against OpenID (not OAuth2)
+        providers due to the risk that credentials (access_token) are leaked
+        which for OpenID is not a problem as only an id_token is available.
+
+        When enabled, all the login state is carried in the URL state instead
+        of the cookie state, and when mismatches are detected, warnings are logged
+        instead of the login process failing.
+        """
     )
 
     def _client_id_default(self):
@@ -1043,7 +1096,10 @@ class OAuthenticator(Authenticator):
         user_info = await self.token_to_user(token_info)
         # validate nonce only if it is present
         if "nonce" in user_info:
-            state = handler.get_state_cookie()
+            if handler.authenticator.openid_prefer_ux_over_csrf:
+                state = handler.get_state_url()
+            else:
+                state = handler.get_state_cookie()
             nonce = _deserialize_state(state).get("nonce") if state else None
             if not nonce or user_info["nonce"] != nonce:
                 self.log.error("OAuth user 'nonce' mismatch, expected '{}', got '{}'".format(
