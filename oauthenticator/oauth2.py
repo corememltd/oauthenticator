@@ -149,13 +149,19 @@ class OAuthCallbackHandler(BaseHandler):
         """
         cookie_state = self.get_state_cookie()
         url_state = self.get_state_url()
-        if not cookie_state:
-            raise web.HTTPError(400, "OAuth state missing from cookies")
         if not url_state:
             raise web.HTTPError(400, "OAuth state missing from URL")
-        if cookie_state != url_state:
-            self.log.warning(f"OAuth state mismatch: {cookie_state} != {url_state}")
-            raise web.HTTPError(400, "OAuth state mismatch")
+        if not cookie_state:
+            if not self.authenticator.openid_prefer_ux_over_csrf:
+                raise web.HTTPError(400, "OAuth state missing from cookies")
+            else:
+                self.log.warning(f"OAuth state missing from cookies (openid_prefer_ux_over_csrf set so ignoring)")
+        elif cookie_state != url_state:
+            if not self.authenticator.openid_prefer_ux_over_csrf:
+                self.log.warning(f"OAuth state mismatch: {cookie_state} != {url_state}")
+                raise web.HTTPError(400, "OAuth state mismatch")
+            else:
+                self.log.warning(f"OAuth state mismatch: {cookie_state} != {url_state} (openid_prefer_ux_over_csrf set so ignoring)")
 
     def check_error(self):
         """Check the OAuth code"""
@@ -376,6 +382,36 @@ class OAuthenticator(Authenticator):
 
         See https://jupyterhub.readthedocs.io/en/stable/api/auth.html?highlight=normalize_username#jupyterhub.auth.Authenticator.normalize_username
         """,
+    )
+
+    openid_prefer_ux_over_csrf = Bool(
+        config=True,
+        help="""Improve the User Experience at the risk of a CSRF attack.
+
+        When using a login-via-email OpenID flow (eg. Portier) your users
+        may struggle to open the link in the email sent in the same browsing
+        context as the original authentication session to JupyterHub; examples
+        of this may be where the login occurs in a private browsing session
+        whilst the link is followed in a non-private session or when your
+        log in via one browser but your email client opens links in another
+        browser by default.
+
+        This is due to the OpenID Connect Core 1.0 section 3.1.2.1 (and also
+        RFC6749 section 10.12) requires a CSRF protection mechanism which
+        really can only be implemented using a browser session cookie.
+
+        If the consequences of a CSRF attack are minimal, for example your
+        deployment is to only demo or provide free learning materials, where
+        there is no motivation or reason for an attacker to attempt this you
+        may wish to consider enabling this option to change a failed
+        validation of the session cookie 'state' to be a log warning only.
+
+        It is strongly recommended you do not enable this option.
+
+        If you do only use it when authenticating against OpenID (not OAuth2)
+        providers due to the risk that credentials (access_token) are leaked
+        which for OpenID is not a problem as only an id_token is available.
+        """
     )
 
     def _client_id_default(self):
